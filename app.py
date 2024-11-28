@@ -11,7 +11,7 @@ from operator import itemgetter
 
 
 # Set environment variables
-os.environ["GOOGLE_API_KEY"] = "AIzaSyDWv3Nd2zcstU0nmqjL29OcLxJ8B-QsOTs"
+os.environ["GOOGLE_API_KEY"] = "xxxxxxxxxxxxxxxxxxxxxx"
 
 # Database connection details
 db_user = "root"
