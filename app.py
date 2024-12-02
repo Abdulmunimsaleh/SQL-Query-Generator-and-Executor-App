@@ -1,4 +1,5 @@
-import streamlit as st
+from flask import Flask, request, jsonify, render_template
+from flask_cors import CORS
 import os
 from langchain_community.utilities.sql_database import SQLDatabase
 from langchain.chains import create_sql_query_chain
@@ -9,18 +10,21 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from operator import itemgetter
 
-
 # Set environment variables
-os.environ["GOOGLE_API_KEY"] = "xxxxxxxxxxxxxxxxxxxxxx"
+os.environ["GOOGLE_API_KEY"] = "Your_API_KEY"
 
-# Database connection details
+# Database details
 db_user = "root"
 db_password = ""
 db_host = "127.0.0.1"
-db_name = "retail_sales_db"
+db_name = "employee_database"
 
-# Initialize the SQL database connection
-db = SQLDatabase.from_uri(f"mysql+pymysql://{db_user}:{db_password}@{db_host}/{db_name}")
+# Initialize SQL database connection
+try:
+    db = SQLDatabase.from_uri(f"mysql+pymysql://{db_user}:{db_password}@{db_host}/{db_name}")
+    print("Database connection successful.")
+except Exception as e:
+    print(f"Database connection failed: {str(e)}")
 
 # Initialize LLM for query generation
 llm = GoogleGenerativeAI(model="gemini-pro", temperature=0)
@@ -28,9 +32,17 @@ generate_query = create_sql_query_chain(llm, db)
 
 # Function to clean SQL query
 def clean_sql_query(query):
-    return query.replace("```sql\n", "").replace("\n```", "")
+    # Remove unnecessary prefixes and SQL formatting tags
+    query = query.replace("SQLQuery:", "").replace("```sql\n", "").replace("\n```", "").strip()
 
-# Prepare the prompt template
+    # Remove any LIMIT clause
+    # if "LIMIT" in query:
+    #     query = query.split("LIMIT")[0].strip()
+
+    return query
+
+
+# Prepare prompt template
 answer_prompt = PromptTemplate.from_template(
     """Given the following user question, corresponding SQL query, and SQL result, answer the user question.
 Question: {question}
@@ -42,34 +54,50 @@ Answer: """
 # Rephrase the answer using LLM
 rephrase_answer = answer_prompt | llm | StrOutputParser()
 
-# Define the Streamlit interface
+# Function to execute query chain
 def execute_query_chain(query):
-    # Generate and clean the SQL query
-    clean_query = clean_sql_query(generate_query.invoke({"question": query}))
+    try:
+        # Generate SQL query
+        generated_query = generate_query.invoke({"question": query})
+        clean_query = clean_sql_query(generated_query)
+        print(f"Generated SQL Query: {clean_query}")  # Debugging output
 
-    # Execute the SQL query
-    execute_query = QuerySQLDataBaseTool(db=db)
-    result = execute_query.invoke(clean_query)
-    
-    # Define the chain with clean query and rephrased answer
-    chain = (
-        RunnablePassthrough.assign(clean_query=lambda context: clean_sql_query(generate_query.invoke({"question": context["question"]})))
-        .assign(result=itemgetter("clean_query") | execute_query)
-        | rephrase_answer
-    )
-    
-    # Execute the chain
-    response = chain.invoke({"question": query})
-    return response
+        # Execute the SQL query
+        execute_query = QuerySQLDataBaseTool(db=db)
+        result = execute_query.invoke({"query": clean_query})
+        print(f"SQL Query Result: {result}")  # Debugging output
 
-# Streamlit layout
-st.title("SQL Query Generator")
-st.write("This app allows you to generate SQL queries based on user questions and display the results.")
+        # Define the chain
+        chain = (
+            RunnablePassthrough.assign(clean_query=lambda context: clean_sql_query(generate_query.invoke({"question": context["question"]})))
+            .assign(result=itemgetter("clean_query") | execute_query)
+            | rephrase_answer
+        )
+        response = chain.invoke({"question": query})
+        return response
 
-# User input for question
-user_question = st.text_input("Enter your question:")
+    except Exception as e:
+        print(f"Error during query execution: {str(e)}")
+        return f"An error occurred: {str(e)}"
 
-if user_question:
-    # Call the function to get the response
+# Initialize Flask app
+flask_app = Flask(__name__)
+CORS(flask_app)
+
+@flask_app.route('/')
+def home():
+    return render_template('index.html')
+
+@flask_app.route('/query', methods=['POST'])
+def handle_query():
+    data = request.get_json()
+    user_question = data.get('message')
+    if not user_question:
+        return jsonify({"response": "Please provide a question."}), 400
+
+    # Process the question
     response = execute_query_chain(user_question)
-    st.write("Answer:", response)
+    return jsonify({"response": response})
+
+if __name__ == "__main__":
+    flask_app.run(host='0.0.0.0', port=5000)
